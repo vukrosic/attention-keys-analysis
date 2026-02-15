@@ -1,55 +1,34 @@
 ---
-description: A complete automated pipeline for planning, implementing, and verifying research ideas in code.
+description: An autonomous pipeline for exhaustive research exploration, reasoning, and scaling.
 ---
 
-# Implementation and Testing Workflow
+# Autonomous Research Pipeline
+
+This workflow is an infinite loop designed to find the Global Maximum of performance on a benchmark before scaling.
+
+## Stage 1: The Breadth Search (Exploration)
+1.  **Idea Injection**: Take the current "Winner" and generate 3 divergent variants using `idea-revisor`.
+    - Diversification: One for **Speed**, one for **Quality**, one for **Stability**.
+2.  **Parallel-Sequential Execution**: Run all 3 variants on the 8M benchmark.
+3.  **Data Harvesting**: Use `experiment-runner` to capture all metrics.
+
+## Stage 2: Synthesis & Deep Reasoning (The Think Tank)
+1.  **Landscape Analysis**: Use `experiment-analyzer` to compare the 3 variants against the baseline and previous winners.
+2.  **Pattern Extraction**: Identify "The Golden Rules" (e.g., "Warmup must be exactly tokens/step * 10").
+3.  **Cross-Idea Review**: Use `idea-reviewer` to see if insights from this idea can be applied to other ideas in the backlog.
+
+## Stage 3: The Optimization Circle (Exploitation)
+1.  **Targeted Refinement**: Pick the single best variant and push its hyperparameters to the limit (e.g., "Keep reducing OGO steps until it breaks").
+2.  **Saturation Check**: Ask: "Have we seen a significant improvement (>2%) in the last 24 hours of compute?"
+    - If NO -> Goal is **Saturation Reached**.
+
+## Stage 4: The Scaling Gate
+1.  **Final Report**: Use `research-reporter` to document the entire 8M token journey.
+2.  **Paired Verification**: ALWAYS run the Baseline and the Champion back-to-back on the target scale (e.g., 20M) to confirm the wall-clock speedup and quality gap persist.
+3.  **Scaling Trigger**: Only if **Saturation Reached** is True and **Paired Verification** confirms success, proceed to the 100M+ token benchmark.
 
 // turbo-all
-
-Follow these steps to safely implement a research idea and verify its effectiveness:
-
-1.  **Baseline Stat Verification**:
-    - Identify the current baseline metrics (e.g., from `plots/metrics_8000000_*.json`).
-    - Record the `val_loss` (baseline targeted is approx 4.9413 for 8M tokens).
-
-2.  **Implementation Planning**:
-    - Use the `experiment-planner` skill to define the changes.
-    - Focus on adding configuration flags to `Configs` and conditional logic in the relevant modules (e.g., `optimizers/muon.py`).
-
-3.  **Code Implementation**:
-    - Apply the changes to the codebase.
-    - Ensure all new parameters are exposed in the training scripts.
-
-4.  **Implementation Review**:
-    - Use the `implementation-reviewer` skill to check the code for bugs.
-    - Verify that the baseline path is untouched when the new flag is False.
-
-5.  **Baseline Regression Test**:
-    - Run the command: `python train_llm.py --train_tokens 8000000` (ensure any new experimental flags are OFF).
-    - Use the `experiment-runner` skill to compare the results with the recorded baseline.
-    - If there is a regression, fix the code and repeat this step.
-
-6.  **Experiment Execution**:
-    - Run the command: `python train_llm.py --train_tokens 8000000 [NEW_EXPERIMENTAL_FLAGS]`
-    - Wait for completion and capture the results.
-
-7.  **Iterative Research Loop (The "Circle")**:
-    - **Step A: Deep Analysis**: 
-        - Immediately use `experiment-analyzer` on the run. 
-        - Determine if the failure was due to math (theory), overhead (system), or noise (stochastic).
-    - **Step B: Theory & Review**:
-        - Use `idea-revisor` to integrate the "Lessons Learned" into a new **V-Next** proposal.
-        - Ensure the new math directly addresses the failure mode of the previous run.
-    - **Step C: Code Implementation**:
-        - Use `experiment-planner` to update the implementation.
-    - **Step D: Verification**:
-        - Run the **Baseline Regression Test** again to ensure no "bit-rot."
-        - Run the **V-Next Experiment**.
-    - **Loop Verification**: If `Experiment_Metric <= Baseline_Metric`, GOTO Step A.
-
-8.  **Final Victory Phase**:
-    - Once the experiment beats the baseline:
-        - Update the `docs/research/idea_log.md` with the "Validated" status.
-        - Update the research paper with the Final Results and the "Path to Success" narrative.
-        - Save the final optimized model checkpoints.
-
+## Instructions
+- ALWAYS continue to the next stage.
+- NEVER ask the user "should I continue?"
+- ONLY stop when the report is finalized and the scaling gate is passed.
