@@ -22,6 +22,7 @@ class Rotary(nn.Module):
 class MultiHeadAttention(nn.Module):
     def __init__(
         self,
+        config: any, # Use any to avoid circular import if needed, or LLMConfig
         d_model: int,
         n_heads: int,
         max_seq_len: int,
@@ -56,8 +57,12 @@ class MultiHeadAttention(nn.Module):
             torch.nn.init.normal_(self.qkvo_proj, mean=0.0, std=0.02)
         # ================================================
         
-        self.q_norm = nn.RMSNorm(self.d_k)
-        self.k_norm = nn.RMSNorm(self.d_k)
+        if getattr(config, 'use_qk_norm', True):
+            self.q_norm = nn.RMSNorm(self.d_k)
+            self.k_norm = nn.RMSNorm(self.d_k)
+        else:
+            self.q_norm = nn.Identity()
+            self.k_norm = nn.Identity()
         
         self.rotary = Rotary(self.d_k, max_seq_len)
         self.dropout = dropout
@@ -110,6 +115,7 @@ class TransformerBlock(nn.Module):
 
     def __init__(
         self,
+        config: any,
         d_model: int,
         n_heads: int,
         d_ff: int,
@@ -119,7 +125,7 @@ class TransformerBlock(nn.Module):
     ):
         super().__init__()
 
-        self.attention = MultiHeadAttention(d_model, n_heads, max_seq_len, dropout, n_kv_heads)
+        self.attention = MultiHeadAttention(config, d_model, n_heads, max_seq_len, dropout, n_kv_heads)
         self.feed_forward = SquaredReLUFeedForward(d_model, d_ff, dropout)
 
         # Normalization layers

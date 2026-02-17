@@ -49,8 +49,11 @@ def setup_muon_optimizer(model: nn.Module, config: LLMConfig):
     muon_params = []
     adamw_params = []
 
+    use_muon = getattr(config, 'use_muon', True)
+
     for name, param in model.named_parameters():
-        if (param.ndim == 2 and 
+        if (use_muon and 
+            param.ndim == 2 and 
             'token_embedding' not in name and 
             'norm' not in name and 
             param.requires_grad):
@@ -61,15 +64,18 @@ def setup_muon_optimizer(model: nn.Module, config: LLMConfig):
     print(f"  Muon parameters: {sum(p.numel() for p in muon_params):,}")
     print(f"  AdamW parameters: {sum(p.numel() for p in adamw_params):,}")
 
-    muon_optimizer = Muon(muon_params, lr=config.muon_lr, momentum=config.muon_momentum)
-    adamw_optimizer = torch.optim.AdamW(
+    optimizers = []
+    if muon_params:
+        optimizers.append(Muon(muon_params, lr=config.muon_lr, momentum=config.muon_momentum))
+    
+    optimizers.append(torch.optim.AdamW(
         adamw_params,
         lr=config.adamw_lr,
         weight_decay=config.weight_decay,
         fused=torch.cuda.is_available()
-    )
+    ))
 
-    return [muon_optimizer, adamw_optimizer]
+    return optimizers
 
 
 def train_model(

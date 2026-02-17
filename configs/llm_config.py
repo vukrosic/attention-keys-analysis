@@ -22,6 +22,8 @@ class LLMConfig:
     # you may change the number of tokens
     max_seq_len: int = 2048  # check the warning above
     vocab_size: int = 49152  
+    use_qk_norm: bool = True # NEW: Control rank collapse ablation
+    use_muon: bool = True    # NEW: Control optimizer ablation
     
     # Base Training Defaults
     compile_model: bool = True

@@ -53,7 +53,7 @@ class DataConfig:
     trust_remote_code: bool = False
     
     # Sequence processing
-    seq_length: int = 512
+    seq_length: int = 2048
     # stride: removed (unused)
     
     # Limits
