@@ -19,6 +19,24 @@ The model with fewer active dimensions still has slightly better loss... *for no
 
 ---
 
+## How we measure collapse: Participation Ratio
+
+We use a metric called **Participation Ratio (PR)** to count how many dimensions an attention head is actually using. 
+
+Think of it like this: 
+*   If a head has 64 dimensions and uses all of them equally, its **PR is 64**.
+*   If it collapses and starts doing all its work in just one dimension (the others becoming copies or zeros), its **PR is 1**.
+
+Mathematically, it's the **(Sum of singular values)² / (Sum of squared singular values)**.
+
+The logic works because of how squares behave:
+*   **The Denominator (squares)** is extremely sensitive to big numbers. If one dimension starts to dominate, its square grows much faster than the rest, which makes the bottom of the fraction huge and pulls the whole ratio down towards 1.
+*   **The Numerator (sum squared)** is more "democratic"—it treats all dimensions more equally before squaring the total.
+
+So, when the PR drops, it's because a few "greedy" dimensions are hogging all the energy, causing the denominator to explode relative to the numerator.
+
+---
+
 ## Where Does the Collapse Happen?
 
 This is where it gets interesting. The collapse isn't uniform across layers.

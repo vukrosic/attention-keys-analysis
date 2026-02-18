@@ -58,7 +58,10 @@ class MinimalLLM(nn.Module):
 
         # Pass through transformer blocks
         for block in self.transformer_blocks:
-            x = block(x)
+            if getattr(self.config, 'gradient_checkpointing', False):
+                x = torch.utils.checkpoint.checkpoint(block, x, use_reentrant=False)
+            else:
+                x = block(x)
 
         # Output projection
         x = self.norm(x)
