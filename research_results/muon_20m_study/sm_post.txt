@@ -1,0 +1,24 @@
+[Research Observations: QK-Norm & Muon Optimizer]
+
+Today I found some weird results - QK-Norm + Muon optimizer leads to better loss but more wasted compute (lower rank heads).
+
+Setup: 88M parameter LLM, 22 layers, 64-dim heads, Muon optimizer. Two identical runs - one with QK-RMSNorm on queries and keys, one without.
+
+The loss of the QK-Norm run seems better at first, but looking at the Participation Ratio (PR) - a measure of how many of the 64 available dimensions each attention head is actually using - reveals a different story. Both are dropping, but QK-Norm is collapsing FASTER. By 16M tokens, the QK-Norm model is using ~7% fewer effective dimensions than the version without it.
+
+Where does the collapse happen?
+It isn't uniform. In the Muon + QK-Norm run, some layers are basically dead. Layers 1 and 3 saw their PR drop below 10. Out of 64 possible dimensions, these layers are only using ~10. The rest is "ghost compute" - the GPU is doing math on dimensions that contribute almost nothing.
+
+In contrast, Muon without QK-Norm stays uniform and alive. Every single layer maintains PR > 45. No layer "died." The representational bandwidth is remarkably uniform across the entire network.
+
+The Paradox:
+The model that looks "worse" structurally is actually predicting tokens slightly better for now. But is it building something fragile?
+
+Open Questions:
+- Does the structural advantage eventually translate to better loss at scale?
+- Is QK-Norm "cheating" by finding low-rank shortcuts that sacrifice downstream capabilities like reasoning or OOD generalization?
+- Is Muon's orthogonalization already doing what QK-Norm does?
+
+Maybe there's a battle between Muon's orthogonalization pressure and QK-Norm's geometry-constraining pressure. Without the norm layer, Muon can push into higher-rank configurations freely, keeping internal representations diverse and distributed.
+
+Special thanks to Novita AI for providing the compute resources for this study.

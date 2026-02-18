@@ -17,6 +17,8 @@ Converts each page of both english and chinese (if there is) PDF into high-quali
 2. Specify the output format as PNG for lossless quality.
 3. The command will automatically number the pages (e.g., `output-0.png`, `output-1.png`).
 
+Place image into new folder.
+
 ## Commands
 
 ```bash
