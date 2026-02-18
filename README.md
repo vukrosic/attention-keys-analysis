@@ -4,7 +4,7 @@ This repository contains the code and results for studying **dimensional collaps
 
 ## Key Finding
 
-At 500K tokens of training on a 1.5B parameter model, **QK-Norm preserves rank** (higher Participation Ratio) compared to an identical model without it — the **opposite** of what was observed at longer training horizons. This suggests a **phase transition** where QK-Norm switches from rank-preserving to rank-collapsing.
+At 500K tokens of training on a 1.5B parameter model, **QK-Norm shows higher Participation Ratio** (spectral uniformity) compared to an identical model without it. The effect is small (+0.75 PR out of 128, single seed) but consistent across all 32 layers, with the strongest signal in deeper layers (+1.58 at Layer 30). Rank collapse begins within the first 100K tokens and follows a strong depth gradient (~122 at Layer 0 to ~106 at Layer 30).
 
 → **Full report**: [`research_results/qk_norm_500k_study/qk_norm_500k_report.md`](research_results/qk_norm_500k_study/qk_norm_500k_report.md)
 
