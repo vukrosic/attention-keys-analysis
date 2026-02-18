@@ -60,10 +60,27 @@ def prepare_filtered_cosmo(target_tokens, subset_type="simple", output_dir="./pr
             
     pbar.close()
     
+    # Chunking and adding labels
+    print(f"Post-processing tokens into 2048-token chunks...")
+    all_tokens = []
+    for item in buffer:
+        all_tokens.extend(item["input_ids"])
+    
+    chunk_size = 2048
+    chunked_buffer = []
+    for i in range(0, len(all_tokens) - chunk_size, chunk_size):
+        chunk = all_tokens[i:i+chunk_size]
+        chunked_buffer.append({"input_ids": chunk, "labels": chunk})
+    
     # Save to disk as a HF dataset
     print(f"Saving to {output_path}...")
-    final_ds = Dataset.from_list(buffer)
+    final_ds = Dataset.from_list(chunked_buffer)
     final_ds.save_to_disk(output_path)
+    
+    # Save metadata
+    with open(os.path.join(output_path, "prep_metadata.json"), "w") as f:
+        json.dump({"max_seq_len": chunk_size, "target_tokens": target_tokens}, f, indent=2)
+    
     print("✅ Done!")
 
 if __name__ == "__main__":

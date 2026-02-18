@@ -19,7 +19,7 @@ from train_llm import prepare_datasets
 from training.trainer import setup_muon_optimizer, train_model
 from research.svd_probe import RankProbe
 
-def run_experiment(name, config_overrides, target_tokens=25_000_000):
+def run_experiment(name, config_overrides, dataset_path="auto", target_tokens=25_000_000):
     print(f"\n" + "="*80)
     print(f"🚀 RUNNING EXPERIMENT: {name}")
     print("="*80)
@@ -27,6 +27,7 @@ def run_experiment(name, config_overrides, target_tokens=25_000_000):
     config = LLMConfig()
     config.train_tokens = target_tokens
     config.compile_model = False # Disable for now to ensure we see logs immediately
+    config.batch_size = 2 # Reduced for 24GB VRAM with 2048 seq_len
     
     # Apply overrides
     for k, v in config_overrides.items():
@@ -36,8 +37,8 @@ def run_experiment(name, config_overrides, target_tokens=25_000_000):
     print(f"Device: {device}")
     
     # Setup data
-    print("Loading datasets...")
-    data_cfg = DataConfig(dataset_path="auto", seq_length=config.max_seq_len)
+    print(f"Loading datasets from {dataset_path}...")
+    data_cfg = DataConfig(dataset_path=dataset_path, seq_length=config.max_seq_len)
     tokenizer = setup_tokenizer(data_cfg)
     train_ds, val_ds = prepare_datasets(data_cfg, tokenizer)
     
@@ -46,6 +47,8 @@ def run_experiment(name, config_overrides, target_tokens=25_000_000):
     
     # Initialize model
     torch.manual_seed(42)
+    torch.cuda.manual_seed(42)
+    torch.cuda.empty_cache()
     model = MinimalLLM(config).to(device)
     
     # Prepare fixed eval batch for SVD
@@ -142,17 +145,24 @@ def run_experiment(name, config_overrides, target_tokens=25_000_000):
 if __name__ == "__main__":
     # The 6 Planned Experiments
     experiments = [
-        ("A1_Baseline_QK_Muon", {"use_qk_norm": True, "use_muon": True}),
-        ("A2_NoQK_Muon", {"use_qk_norm": False, "use_muon": True}),
-        ("B1_Baseline_QK_AdamW", {"use_qk_norm": True, "use_muon": False}),
-        ("B2_NoQK_AdamW", {"use_qk_norm": False, "use_muon": False}),
-        # ("C1_SimpleData_QK_Muon", ...), # Needs separate data preparation
-        # ("C2_ComplexData_QK_Muon", ...), # Needs separate data preparation
+        ("A1_Baseline_QK_Muon", {"use_qk_norm": True, "use_muon": True}, "auto"),
+        ("A2_NoQK_Muon", {"use_qk_norm": False, "use_muon": True}, "auto"),
+        ("B1_Baseline_QK_AdamW", {"use_qk_norm": True, "use_muon": False}, "auto"),
+        ("B2_NoQK_AdamW", {"use_qk_norm": False, "use_muon": False}, "auto"),
+        ("C1_SimpleData_QK_Muon", {"use_qk_norm": True, "use_muon": True}, "./processed_data/cosmo_simple_25000000"), 
+        ("C2_ComplexData_QK_Muon", {"use_qk_norm": True, "use_muon": True}, "./processed_data/cosmo_complex_25000000"), 
     ]
     
-    # For now, let's run the first 4 (A1, A2, B1, B2)
-    # Each takes ~2 hours on a good GPU for 25M tokens.
-    # Total ~8 hours.
+    # Production Run: 25M tokens for AdamW experiments (B1, B2)
+    target_tokens = 25_000_000
+    adamw_exps = experiments[2:4] # B1, B2
     
-    for name, overrides in experiments:
-        run_experiment(name, overrides)
+    print(f"\n{'='*80}\n🚀 PRODUCTION MODE: Running {target_tokens:,} tokens for AdamW experiments\n{'='*80}")
+    
+    for name, overrides, path in adamw_exps:
+        # Use the specific mix path we just prepared to ensure parity with the Muon run
+        run_experiment(name, overrides, dataset_path=path, target_tokens=target_tokens)
+    
+    print("\n" + "="*80)
+    print("✅ ADAMW PRODUCTION EXPERIMENTS COMPLETE.")
+    print("="*80)
