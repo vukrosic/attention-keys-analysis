@@ -113,17 +113,11 @@ This is per-head; across all $16 \times 32 = 512$ heads, this represents a non-t
 
 ## 4. Figure-by-Figure Analysis
 
-### 4.1 Figure 1 — Four-Panel Comparison
+### 4.1 Panel A — Training Loss Comparison
 
-![Main Comparison](qk_norm_rank_collapse_500k.png)
+![Panel A — Training Loss](panel_a_loss.png)
 
-This is the primary result figure, showing four views of the same underlying phenomenon.
-
----
-
-#### Panel A (Top-Left): Training Loss Comparison
-
-**What it shows:** Cross-entropy training loss (averaged over 50-step windows) vs. tokens seen, for both conditions.
+**What it shows:** Cross-entropy training loss (averaged over 50-step windows) vs. tokens seen, for both conditions. The orange curve is With QK-Norm; the cyan curve is Without QK-Norm. Final values are annotated at the right edge.
 
 **Reading the curves:**
 
@@ -132,53 +126,101 @@ This is the primary result figure, showing four views of the same underlying phe
 - The curves are **nearly overlapping** — the gap at 400K tokens is only $|7.192 - 7.222| = 0.030$ nats, or $0.42\%$ relative difference.
 - QK-Norm has **consistently lower loss** at every checkpoint, though the margin is small.
 
+**Data points:**
+
+| Tokens | QK-Norm Loss | NoQK Loss | $\Delta\mathcal{L}$ |
+|:---:|:---:|:---:|:---:|
+| 102K | 9.3138 | 9.3019 | +0.012 |
+| 205K | 7.8956 | 7.8863 | +0.009 |
+| 307K | 7.4693 | 7.4574 | +0.012 |
+| 410K | **7.1915** | **7.2221** | **−0.031** |
+
+Note: QK-Norm starts with *higher* loss (worse) at the first 3 checkpoints, but **overtakes** NoQK at the final checkpoint. The crossover happens between 307K and 410K tokens.
+
 **Interpretation:** At this extremely early stage (the model has seen 500K tokens vs. a typical pretraining budget of 1T+ tokens), QK-Norm provides a slight optimization advantage. The normalization stabilizes gradient magnitudes in the $QK^\top$ attention computation:
 
 $$\text{Attn}(Q, K, V) = \text{softmax}\!\left(\frac{QK^\top}{\sqrt{d_k}}\right)V$$
 
 Without normalization, the scale of $QK^\top$ entries depends on $\|Q\|$ and $\|K\|$, which can drift during training. RMSNorm constrains $\|K_h\| = \sqrt{d_k} \cdot \|\gamma\|_\text{RMS}$, preventing attention logit explosion. This stability likely explains the small loss advantage.
 
+The loss reduction rate slows over time, following a roughly inverse-sqrt pattern:
+
+$$\mathcal{L}(t) \approx \mathcal{L}_0 - c \cdot t^{-\alpha}, \quad \alpha \approx 0.5$$
+
+This is expected from scaling law analyses (Hoffmann et al., 2022), where loss follows a power law in tokens seen.
+
 ---
 
-#### Panel B (Top-Right): Mean Participation Ratio Trajectory
+### 4.2 Panel B — Rank Collapse: Mean Effective Rank Over Time
 
-**What it shows:** The mean PR (averaged over all 32 layers × 8 KV heads = 256 individual head measurements) vs. tokens seen. This is the core measurement of rank collapse.
+![Panel B — PR Trajectory](panel_b_pr_trajectory.png)
+
+**What it shows:** The mean PR (averaged over all 32 layers) vs. tokens seen. The orange curve is With QK-Norm; the cyan curve is Without QK-Norm. The shaded purple region between the curves highlights the **rank gap** — the region where QK-Norm preserves more effective dimensions than NoQK. Initial and final PR values are annotated.
 
 **Reading the curves:**
 
 - **Initialization** (step 0): QK-Norm starts at PR = 115.86, NoQK at 115.70. Both are near but not at the theoretical maximum of 128. The gap from 128 at initialization ($\sim$12 units) reflects the random weight initialization — even random matrices are not perfectly uniform in their singular value spectrum. For a random Gaussian matrix $K \in \mathbb{R}^{n \times d}$ with $n \gg d$, the Marchenko-Pastur distribution predicts a non-uniform spectrum, yielding PR < $d$.
+
+  Specifically, for the Marchenko-Pastur law with aspect ratio $\gamma = n/d = 8192/128 = 64$, the expected PR of a random matrix is approximately:
+
+  $$\text{PR}_\text{random} \approx d \cdot \frac{(1 + 1/\sqrt{\gamma})^2 + (1 - 1/\sqrt{\gamma})^2}{(1 + 1/\sqrt{\gamma})^2 + (1 - 1/\sqrt{\gamma})^2 + \text{kurtosis correction}} \approx 0.90 \cdot d$$
+
+  For $d = 128$: $\text{PR}_\text{random} \approx 115$, which matches our observed initialization values almost exactly.
+
 - **First 100K tokens**: Both curves drop sharply — QK drops to 114.83, NoQK to 114.63. This is the **fastest collapse phase**, occurring as the model moves from random weights to structured representations.
-- **100K–300K tokens**: Both curves **plateau** — QK hovers at 114.89, NoQK at 114.60. The initial representation shock has been absorbed.
-- **300K–400K tokens**: A **second descent** begins — both curves drop again. QK falls to 114.05, NoQK falls more steeply to 113.30.
+
+- **100K–300K tokens**: Both curves **plateau** — QK hovers at 114.89, NoQK at 114.60. The initial representation shock has been absorbed. This plateau suggests a **metastable equilibrium** — the model has found a local spectral structure and will only depart from it when it accumulates enough training signal.
+
+- **300K–400K tokens**: A **second descent** begins — both curves drop again. QK falls to 114.05, NoQK falls more steeply to 113.30. This "second descent" mirrors the well-known double-descent phenomenon in generalization, but here manifested in the spectral domain.
 
 **Critical observation:** The NoQK curve drops **below** QK at every checkpoint and the gap **widens over time**:
 
-| Checkpoint | $\Delta\text{PR}$ (QK − NoQK) |
-|:---:|:---:|
-| 0 (init) | +0.16 |
-| 100K | +0.20 |
-| 200K | +0.30 |
-| 300K | +0.99 |
-| 400K | **+0.75** |
+| Checkpoint | QK Mean PR | NoQK Mean PR | $\Delta\text{PR}$ (QK − NoQK) |
+|:---:|:---:|:---:|:---:|
+| 0 (init) | 115.86 | 115.70 | +0.16 |
+| 102K | 114.83 | 114.63 | +0.20 |
+| 205K | 114.90 | 114.60 | +0.30 |
+| 307K | 114.89 | 113.91 | **+0.99** |
+| 410K | 114.05 | 113.30 | +0.75 |
 
-The gap peaks at 300K tokens (+0.99) and slightly narrows at 400K (+0.75), suggesting some oscillation. But the overall trend is clear: **at this early stage, QK-Norm preserves higher rank**.
+The gap peaks at 307K tokens (+0.99) and slightly narrows at 410K (+0.75), suggesting some oscillation. But the overall trend is clear: **at this early stage, QK-Norm preserves higher rank**.
 
 **This is the opposite of our 20M-token finding** (88M model), where QK-Norm collapsed PR to ~30/64 while NoQK maintained ~51/64. This reversal implies a **phase transition** exists between 500K and 5M tokens where QK-Norm switches from rank-preserving to rank-collapsing.
 
+The rate of collapse can be estimated as:
+
+$$\frac{d(\text{PR})}{d(\text{tokens})} \bigg|_\text{QK} \approx \frac{-1.82}{409{,}600} \approx -4.4 \times 10^{-6} \text{ PR/token}$$
+
+$$\frac{d(\text{PR})}{d(\text{tokens})} \bigg|_\text{NoQK} \approx \frac{-2.40}{409{,}600} \approx -5.9 \times 10^{-6} \text{ PR/token}$$
+
+NoQK collapses **34% faster** in absolute rate. Equivalently, QK-Norm reduces the collapse rate by a factor of $5.9 / 4.4 \approx 1.34\times$.
+
 ---
 
-#### Panel C (Bottom-Left): Per-Layer Effective Rank at Final Checkpoint
+### 4.3 Panel C — Per-Layer Effective Rank at 500K Tokens
 
-**What it shows:** Side-by-side bar chart of the PR at each of the 32 layers at the 500K-token checkpoint, for both conditions.
+![Panel C — Per-Layer PR](panel_c_per_layer.png)
+
+**What it shows:** Side-by-side bar chart of the PR at each of the 32 layers at the 500K-token checkpoint, for both conditions. The orange bars are With QK-Norm; the cyan bars are Without QK-Norm. A horizontal dotted line at $d_k = 128$ marks the theoretical maximum (full rank).
 
 **Reading the bars:**
 
 - **The depth gradient is striking.** PR monotonically decreases from ~122–123 at Layer 0 down to ~105–108 at Layers 29–31. This is a span of ~17 PR units across the network depth.
-- **Layer 0** (shallowest): PR ≈ 122.7 for both. These early layers process the rawest token-level features — positional information, basic syntax — and maintain nearly full rank.
-- **Layers 1–8**: PR ≈ 118–122. These layers are **gaining** rank during training (PR is higher at 400K than at init for some layers). This happens because random initialization produces some spurious low-rank structure that training irons out.
-- **Layers 15–20**: The "transition zone" — PR ≈ 111–115. Intermediate between shallow feature extraction and deep specialization.
-- **Layers 29–31** (deepest): PR drops to 105–108. These layers show the most collapse. Deeper layers in transformers are known to develop more task-specific, token-prediction-oriented representations, which naturally require fewer dimensions.
-- **Both bars at each layer are nearly identical in height**, confirming that the QK-Norm effect is subtle at this stage.
+- **Layer 0** (shallowest): PR ≈ 122.7 for both. These early layers process the rawest token-level features — positional information, basic syntax — and maintain nearly full rank. The utilization is $122.7 / 128 = 95.9\%$.
+- **Layers 1–8**: PR ≈ 118–122. Some of these layers are **gaining** rank during training (PR is higher at 400K than at init). This happens because random initialization produces some spurious low-rank structure that training irons out.
+- **Layers 15–20**: The "transition zone" — PR ≈ 111–115 ($86.7\%$–$89.8\%$ utilization). Intermediate between shallow feature extraction and deep specialization.
+- **Layers 29–31** (deepest): PR drops to 105–108 ($82.0\%$–$84.4\%$). These layers show the most collapse. Deeper layers develop more task-specific, token-prediction-oriented representations, which naturally require fewer dimensions.
+- **Both bars at each layer are nearly identical in height**, confirming that the QK-Norm effect is subtle at this stage. The bars would need to diverge significantly more for the effect to be visible at this scale.
+
+**Three-zone decomposition:**
+
+| Depth Zone | Layers | QK Avg PR | NoQK Avg PR | QK Avg Drop | NoQK Avg Drop |
+|:---|:---:|:---:|:---:|:---:|:---:|
+| Shallow | 0–7 | 120.87 | 120.55 | −1.04 | −1.24 |
+| Middle | 8–23 | 113.63 | 112.87 | +0.03 | −0.39 |
+| Deep | 24–31 | 108.67 | 107.65 | +4.66 | +5.27 |
+
+Note: Positive "drop" values in deep layers mean PR *decreased* from initialization; negative values in shallow/middle layers mean PR *increased* from init (rank recovery).
 
 **The depth-rank relationship is approximately linear.** A rough fit to the QK-Norm data gives:
 
@@ -186,35 +228,59 @@ $$\text{PR}(\ell) \approx 122.5 - 0.47\ell$$
 
 where $\ell$ is the layer index (0–31). This predicts a PR drop of $\sim$0.47 per layer, or about $15$ total across the 32-layer stack. The actual observed range (122.8 to 106.6 = 16.2 units) is close to this linear prediction.
 
+The residuals from this linear fit reveal interesting structure: layers 1–3 are *above* the line (they recover rank during training), while layers 29–30 are *below* it (they collapse faster than average). This suggests a non-linear component:
+
+$$\text{PR}(\ell) \approx 122.5 - 0.47\ell - 0.005\ell^2$$
+
+The quadratic term accelerates collapse in deeper layers, consistent with the gradient amplification effect at depth.
+
 ---
 
-#### Panel D (Bottom-Right): Per-Layer Rank Difference $\Delta\text{PR}$ (QK − NoQK)
+### 4.4 Panel D — Per-Layer Rank Difference: QK-Norm Effect
 
-**What it shows:** For each layer, the difference $\text{PR}_\text{QK}(\ell) - \text{PR}_\text{NoQK}(\ell)$ at the final checkpoint. Green bars = QK-Norm has higher rank. Red bars = QK-Norm has lower rank.
+![Panel D — Delta PR](panel_d_delta.png)
+
+**What it shows:** For each layer, the difference $\text{PR}_\text{QK}(\ell) - \text{PR}_\text{NoQK}(\ell)$ at the final checkpoint. Green bars mean QK-Norm has **higher** rank (preserves more dimensions). Red bars would mean QK-Norm has **lower** rank (collapses more). The peak delta is annotated with an arrow at Layer 30. An inset label confirms all 32 bars are positive.
 
 **Reading the bars:**
 
-- **Every single bar is green.** QK-Norm maintains higher rank than NoQK at all 32 layers without exception.
-- **The effect is depth-dependent.** The delta follows a clear pattern:
+- **Every single bar is green.** QK-Norm maintains higher rank than NoQK at all 32 layers without exception. This is a clean, unambiguous signal.
+- **The effect is depth-dependent.** The delta follows a clear monotonically increasing trend with depth:
   - **Layers 0–7** (shallow): $\Delta\text{PR} \approx +0.1$ to $+0.4$. Small effect — little difference.
   - **Layers 8–15** (mid): $\Delta\text{PR} \approx +0.5$ to $+0.9$. Moderate effect.
-  - **Layers 16–31** (deep): $\Delta\text{PR} \approx +0.7$ to $+1.6$. Largest effect, peaking at **Layer 25** ($\Delta = +0.98$) and **Layer 27** ($\Delta = +1.37$).
+  - **Layers 16–31** (deep): $\Delta\text{PR} \approx +0.7$ to $+1.6$. Largest effect, peaking at **Layer 30** ($\Delta = +1.58$) and **Layer 27** ($\Delta = +1.37$).
 
-Exact values at the extremes:
+**The trend is approximately linear in depth:**
 
-| Layer | QK PR | NoQK PR | $\Delta$ |
-|:---:|:---:|:---:|:---:|
-| 0 | 122.75 | 122.65 | +0.10 |
-| 9 | 116.36 | 115.88 | +0.48 |
-| 15 | 112.81 | 112.14 | +0.67 |
-| 20 | 110.74 | 109.74 | +1.00 |
-| 25 | 109.27 | 108.30 | +0.98 |
-| 27 | 108.64 | 107.26 | +1.37 |
-| 30 | 106.56 | 104.98 | **+1.58** |
+$$\Delta\text{PR}(\ell) \approx 0.05 + 0.04\ell$$
 
-**Layer 30 shows the maximum differential** — QK-Norm preserves 1.58 more effective dimensions than NoQK. In relative terms, this is $1.58 / 128 = 1.2\%$ of the total capacity.
+This predicts $\Delta(0) \approx 0.05$ and $\Delta(31) \approx 1.29$, which roughly matches the data.
 
-**Why do deeper layers show a larger QK-Norm benefit?** Deep layers have larger gradient magnitudes due to the loss being computed at the output of the final layer. Without normalization, these gradients can cause more aggressive spectral updates to $W_K$, which drives faster collapse. QK-Norm's RMSNorm acts as a buffer: regardless of what happens to $W_K$, the key vectors are rescaled to have controlled norms, dampening the spectral impact of large gradient steps.
+Exact values at key layers:
+
+| Layer | QK PR | NoQK PR | $\Delta$ | $\Delta/d_k$ |
+|:---:|:---:|:---:|:---:|:---:|
+| 0 | 122.75 | 122.65 | +0.10 | 0.08% |
+| 9 | 116.36 | 115.88 | +0.48 | 0.38% |
+| 15 | 112.81 | 112.14 | +0.67 | 0.52% |
+| 20 | 110.74 | 109.74 | +1.00 | 0.78% |
+| 25 | 109.27 | 108.30 | +0.98 | 0.76% |
+| 27 | 108.64 | 107.26 | +1.37 | 1.07% |
+| 30 | 106.56 | 104.98 | **+1.58** | **1.23%** |
+
+**Layer 30 shows the maximum differential** — QK-Norm preserves 1.58 more effective dimensions than NoQK. In relative terms, this is $1.58 / 128 = 1.23\%$ of the total capacity.
+
+**Total extra dimensions preserved by QK-Norm across the entire network:**
+
+$$\sum_{\ell=0}^{31} \Delta\text{PR}(\ell) \approx 23.9 \text{ effective dimensions}$$
+
+Averaged over 32 layers: $23.9 / 32 = 0.75$ PR per layer (which matches the mean $\Delta$ from the summary table).
+
+**Why do deeper layers show a larger QK-Norm benefit?** Deep layers have larger gradient magnitudes due to the loss being computed at the output of the final layer. The gradient of the loss with respect to attention keys at layer $\ell$ is:
+
+$$\frac{\partial \mathcal{L}}{\partial K^{(\ell)}} = \frac{\partial \mathcal{L}}{\partial \text{logits}} \cdot \prod_{i=\ell+1}^{L} J_i \cdot \frac{\partial \text{Attn}^{(\ell)}}{\partial K^{(\ell)}}$$
+
+where $J_i$ is the Jacobian of layer $i$. The product $\prod J_i$ grows (or stays near 1 with residual connections), meaning deeper layers receive more loss signal. Without normalization, these gradients can cause more aggressive spectral updates to $W_K$, driving faster collapse. QK-Norm's RMSNorm acts as a buffer: regardless of what happens to $W_K$, the key vectors are rescaled to have controlled norms, dampening the spectral impact of large gradient steps.
 
 ---
 

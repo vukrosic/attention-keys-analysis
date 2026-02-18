@@ -1,32 +1,97 @@
-# LLM Research Kit
+# QK-Norm and Rank Collapse in LLMs
 
-A high-performance codebase for LLM research, pretraining, and optimization.
+This repository contains the code and results for studying **dimensional collapse** in transformer attention heads, specifically investigating how **QK-Normalization** (RMSNorm on query/key projections) affects the effective rank of key representations during pretraining.
 
-## 🗺️ Project Goals
+## Key Finding
 
-This repository provides a clean, efficient, and reproducible environment for experimenting with Large Language Models. Whether you are testing new architectures, optimizers, or data strategies, this kit is designed to scale from small experiments to large-scale pretraining.
+At 500K tokens of training on a 1.5B parameter model, **QK-Norm preserves rank** (higher Participation Ratio) compared to an identical model without it — the **opposite** of what was observed at longer training horizons. This suggests a **phase transition** where QK-Norm switches from rank-preserving to rank-collapsing.
 
----
+→ **Full report**: [`research_results/qk_norm_500k_study/qk_norm_500k_report.md`](research_results/qk_norm_500k_study/qk_norm_500k_report.md)
 
-## 🚀 Getting Started
+## Repository Structure
 
-To set up your environment and start training, please follow the **[Full Setup Guide](docs/SETUP_INSTRUCTIONS.md)**.
+```
+├── research/
+│   ├── qk_norm_500k_study.py    # Main experiment script (train + probe + plot + report)
+│   ├── split_panels.py          # Generates individual panel images from results JSON
+│   └── svd_probe.py             # SVD-based rank measurement (Participation Ratio)
+│
+├── research_results/
+│   └── qk_norm_500k_study/
+│       ├── qk_norm_500k_report.md      # Full research report with analysis
+│       ├── combined_results.json       # Raw numerical data (PR, loss, per-layer)
+│       ├── panel_a_loss.png            # Training loss comparison
+│       ├── panel_b_pr_trajectory.png   # Mean PR over time
+│       ├── panel_c_per_layer.png       # Per-layer PR at final checkpoint
+│       ├── panel_d_delta.png           # QK-Norm effect per layer
+│       └── layer_pr_heatmap_500k.png   # Layer × time PR heatmap
+│
+├── models/
+│   ├── llm.py           # MinimalLLM model (1.5B params)
+│   ├── layers.py        # TransformerBlock with GQA attention + QK-Norm
+│   └── components.py    # Feedforward components
+│
+├── configs/
+│   ├── llm_config.py      # Base LLMConfig dataclass
+│   ├── llm_config_1b.py   # 1B-scale config (2048 d_model, 32 layers, 16 heads)
+│   └── dataset_config.py  # Data loading configuration
+│
+├── data/
+│   └── loader.py        # Dataset loading + tokenization
+│
+├── training/
+│   ├── trainer.py       # Training loop + Muon optimizer setup
+│   └── evaluation.py    # Model evaluation utilities
+│
+├── optimizers/
+│   └── muon.py          # Muon optimizer implementation
+│
+├── utils/
+│   ├── helpers.py       # Seed setting, time formatting
+│   └── logger.py        # Logging setup
+│
+├── train_llm.py         # General training entrypoint (provides prepare_datasets)
+└── requirements.txt     # Python dependencies
+```
 
-We follow scientifically rigorous research practices. See **[Contributing Guidelines](docs/CONTRIBUTING.md)** for more details.
+## Reproducing the Experiment
 
----
+### Prerequisites
 
-## 🛠 Features
+```bash
+pip install -r requirements.txt
+```
 
-- **High-Performance Training**: Optimized for speed and efficiency using modern PyTorch features.
-- **Reproducibility**: Built-in tools to ensure experiments are consistent across different runs.
-- **Modular Design**: Easily swap out models, optimizers, and datasets.
-- **Benchmarking**: Standardized benchmarks to measure progress.
+You also need the preprocessed training data at:
+```
+processed_data/pretrain_mix_26000000/
+```
 
----
+### Run the Experiment
 
-## 🤝 Partners & Support
+```bash
+# Full experiment: train with and without QK-Norm, generate plots + report
+python research/qk_norm_500k_study.py
 
-**If you want to collaborate on research or contribute to this open-source initiative, please reach out.**
+# Re-generate individual panel images from existing results
+python research/split_panels.py
+```
 
-We work with various partners to provide compute and resources for open-source research.
+The experiment trains a **1.5B parameter** model twice (once with QK-Norm, once without) for **500K tokens** each, measuring the Participation Ratio via SVD every 50 steps.
+
+**Runtime**: ~30 minutes on a single A100 GPU.
+
+## Method
+
+We measure the **Participation Ratio (PR)** of post-RoPE key representations:
+
+$$PR = \frac{(\sum_i \sigma_i)^2}{\sum_i \sigma_i^2}$$
+
+where $\sigma_i$ are singular values of the key matrix $K \in \mathbb{R}^{n \times d_k}$.
+
+- **PR = 128** → full rank (all dimensions used equally)
+- **PR = 1** → total collapse (one dimension dominates)
+
+## License
+
+MIT
