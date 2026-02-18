@@ -27,7 +27,7 @@ class LLMConfig:
     
     # Base Training Defaults
     compile_model: bool = True
-    batch_size: int = 8
+    batch_size: int = 4
     gradient_accumulation_steps: int = 1
     train_tokens: int = 8000000
     
