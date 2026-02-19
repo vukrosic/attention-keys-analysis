@@ -1,10 +1,32 @@
-# Rank Collapse and Recovery in Attention Keys: How Learned γ in QK-Norm Controls Dimensional Structure at 1.5B Scale
+# QK-Norm Might Worsen Muon Optimizer LLM Training
+
+> **Note:** This is an exploratory blog post documenting early-stage observations from a single-seed experiment. The findings are directional signals, not established results. We run one seed per condition and train for only 50M tokens (~0.3% of Chinchilla-optimal for a 1.5B model). All claims should be read as "we observed X" rather than "X is true in general."
 
 ---
 
 ## Key Findings at a Glance
 
-This study trains a **1.5B parameter** LLM under three conditions to answer one question: *when QK-Norm helps attention heads, is it because of the normalization itself or because of the learned γ weights?* Below we first explain every concept you need to understand the results, then walk through the figures step by step.
+![Key Rank Collapse — Does γ or Normalization Drive It?](./images/2_key_pr_causal.png)
+
+Each attention head in a transformer uses a **128-dimensional space** to represent tokens. Ideally, the model spreads its representations across all 128 dimensions. In practice, many dimensions shrink to near-zero variance — the model "collapses" into a lower-dimensional subspace. The y-axis in the figure above measures how many of those 128 dimensions are actively carrying variance (higher = more dimensions in use). **Important:** near-zero variance doesn't mean a dimension is useless — it could still encode critical features. PR measures geometric spread, not information content.
+
+**QK-Norm** is a technique that does two things to the attention vectors: (1) it **normalizes** them (controls their magnitude), and (2) it multiplies each dimension by a **learnable weight called γ** — essentially giving the model a volume knob for each dimension. We wanted to know: when QK-Norm helps, which part is actually responsible?
+
+If you need explanation of the QK-Norm and γ (gamma) scroll below first.
+
+We trained a **1.5B parameter** (full specs below) language model three times — once with full QK-Norm, once with normalization but the γ knobs locked at 1.0 (so the model can't adjust them), and once with no QK-Norm at all. Here is what we found:
+
+1. **The γ knobs — not the normalization — appear to control how many dimensions carry variance.** The orange line (full QK-Norm) recovers to 65.7 dimensions. The purple line (normalization but γ locked) recovers to only 59.6 — *worse* than the cyan line (no QK-Norm at all, 63.3). Locking the γ knobs makes the model *worse* than not normalizing in this single-seed experiment.
+
+2. **But normalization — not γ — is what makes the model learn better.** Both normalized models (orange and purple) achieve nearly identical loss, and both beat the no-QK-Norm model. The γ knobs don't affect learning speed at all on this small scale, undertrained model.
+
+- It seems that the model still learns to predict next token well, even if some dimensions inside of the heads are becoming near-zero (holding less data).
+
+3. **Every model goes through the same collapse-then-recovery pattern.** All three start with ~87 dimensions in use, crash to ~51–55, then recover. This U-shape appears in all three conditions, suggesting it may be a general feature of early transformer training (though this needs to be investigated further).
+
+4. **We cannot link PR to model quality.** This is the most important caveat: the model with the *fewest* active dimensions (Frozen γ, PR=59.6) achieves the *best* loss (3.614). **Higher PR does not mean a better model in our experiment.** γ controls a geometric property (how evenly variance is spread) that we cannot yet connect to downstream performance. Whether collapsed dimensions represent wasted compute or efficient compression remains an open question — and the answer may well be "the model doesn't need all 128 dimensions."
+
+Below we define every technical concept, then walk through the figures step by step.
 
 ---
 
@@ -33,13 +55,13 @@ Think of γ as a **per-dimension volume knob**. Each of the 128 dimensions gets 
 
 #### What is Participation Ratio (PR)?
 
-PR measures **how many of the 128 dimensions are actually being used** in the key vectors. It answers: "is the model spreading information across many dimensions, or cramming everything into a few?"
+PR measures **how many of the 128 dimensions carry significant variance** in the key vectors. It answers: "is the model spreading variance across many dimensions, or concentrating it into a few?"
 
 - **PR = 128** → all dimensions contribute equally (maximum diversity, full rank)
-- **PR = 1** → only one dimension carries any signal (total collapse)
-- **PR ≈ 60** (what we observe) → roughly 60 of 128 dimensions are meaningfully active
+- **PR = 1** → strictly means only one singular value is nonzero and all others are exactly zero. In practice, singular values are never exactly zero — they are just very small. So a real model might show PR = 2–3 in a severe collapse, meaning variance is overwhelmingly concentrated in 2–3 dimensions while the remaining ~125 carry negligible (but not zero) variance.
+- **PR ≈ 60** (what we observe) → roughly 60 of 128 dimensions carry significant variance
 
-When PR drops, it means the model is "wasting" dimensions — many key dimensions become redundant or near-zero. This is called **rank collapse** and can limit the model's representational capacity.
+When PR drops, variance concentrates into fewer dimensions — many key dimensions shrink to near-zero variance. This is called **dimensional collapse** (or rank collapse). **Important caveat:** a low-variance dimension is not necessarily a useless dimension. It could still encode subtle but critical distinctions (e.g., binary features). PR measures geometric spread, not information content. Whether collapsed dimensions represent wasted compute or efficient compression remains an open question.
 
 #### The Three Experimental Conditions
 
@@ -51,10 +73,7 @@ We train the same 1.5B model three times, changing only how QK-Norm is configure
 | **Frozen γ=1** | ✅ Yes | ❌ No (locked at 1.0) | Ablation — has normalization but *not* the learned scaling |
 | **No QK-Norm** | ❌ No | ❌ No | Baseline — no normalization at all |
 
-**Why three conditions?** Because QK-Norm does two things at once (normalize + scale by γ). With only two conditions (on/off) we can't tell which part matters. The Frozen γ=1 condition surgically removes γ learning while keeping normalization, letting us isolate the cause:
-- If Learned γ ≠ Frozen γ ≈ No QK-Norm → **γ is the driver** (removing γ makes it behave like no norm)
-- If Learned γ ≈ Frozen γ ≠ No QK-Norm → **Normalization is the driver** (γ doesn't matter)
-- If all three differ → **Both contribute**
+**Why three conditions?** Because QK-Norm does two things at once (normalize + scale by γ). With only two conditions (on/off) we can't tell which part matters. The Frozen γ=1 condition surgically removes γ learning while keeping normalization, letting us isolate the cause.
 
 ---
 
@@ -62,20 +81,20 @@ We train the same 1.5B model three times, changing only how QK-Norm is configure
 
 ![Key Rank Collapse — Does γ or Normalization Drive It?](./images/2_key_pr_causal.png)
 
-**What this figure shows:** The y-axis is *Participation Ratio (PR)* — the number of effectively used dimensions (out of 128). Higher = healthier. The x-axis is training progress in millions of tokens.
+**What this figure shows:** Lower PR (y-axis) possibly indicates more wasted compute or useless dimensions, but this needs further investigation, so let's define it strictly: The y-axis is *Participation Ratio (PR)* is the number of dimensions carrying significant variance (out of 128). Higher means variance is more evenly spread; lower means it is concentrated into fewer dimensions. The x-axis is training progress in millions of tokens.
 
 **Reading it step by step:**
 
 1. **All three models start at PR ≈ 87** (top-left). At random initialization, each of the 128 dimensions contributes roughly equally — the model hasn't learned anything yet.
 
-2. **All three crash to PR ≈ 51–55 by ~8M tokens** (bottom of the U-curve). This is *rank collapse* — the model destroys its initial random structure as it begins learning. This happens regardless of whether QK-Norm is used. **Conclusion: normalization alone does NOT prevent collapse.**
+2. **All three crash to PR ≈ 51–55 by ~8M tokens** (bottom of the U-curve). This is *rank collapse* — the model destroys its initial random structure as it begins learning. This happens regardless of whether QK-Norm is used.
 
 3. **After the collapse floor, the three lines diverge** — this is where the experiment reveals its answer:
    - 🟠 **Learned γ (orange)** recovers the fastest and highest, reaching PR = **65.7**
    - 🔵 **No QK-Norm (cyan)** recovers to PR = **63.3** — surprisingly, the second-best
-   - 🟣 **Frozen γ=1 (purple)** recovers the least, only to PR = **59.6** — the *worst* of all three
+   - 🟣 **Frozen γ=1 (purple)** recovers the least, only to PR = **59.6**
 
-4. **The punchline:** If normalization were the key mechanism, the two normalized models (Learned γ and Frozen γ) would recover similarly. Instead, removing γ learning (Frozen) makes it *worse* than having no normalization at all. **Therefore, the learned γ parameter — not the normalization — is what drives rank recovery.**
+4. If normalization were the key mechanism for recovery, the two normalized models (Learned γ and Frozen γ) would recover similarly. Instead, removing γ learning (Frozen) makes it *worse* than having no normalization at all. **In this experiment, the learned γ parameter — not the normalization — appears to be what drives rank recovery.** (Caveat: this is a single-seed result; the 6-unit difference could narrow or widen with different seeds.)
 
 ### Figure 2: Loss Tells a Different Story
 
@@ -89,72 +108,41 @@ We train the same 1.5B model three times, changing only how QK-Norm is configure
 
 2. **The No QK-Norm model has noticeably higher loss** — 3.68 training, 3.51 validation. Normalization clearly helps the model learn better.
 
-3. **But here's the key insight:** Compare this to Figure 1 above. For *loss*, normalization helps equally whether γ is learned or frozen. For *rank*, only learned γ helps — frozen γ actually hurts. **This means loss and rank are driven by different mechanisms:**
+3. **But here's the key insight:** Compare this to Figure 1 above. For *loss*, normalization helps equally whether γ is learned or frozen. For *rank*, only learned γ helps — frozen γ actually hurts. **This suggests loss and rank are driven by different mechanisms:**
    - **Normalization → stabilizes gradients → lowers loss** (doesn't need γ)
-   - **Learned γ → selectively amplifies/suppresses dimensions → preserves rank** (needs γ)
+   - **Learned γ → selectively amplifies/suppresses dimensions → maintains dimensional diversity** (needs γ)
 
-### The Four Conclusions, Explained
+4. **An open question emerges:** The Frozen γ=1 model has the *lowest* PR (59.6) but achieves the *best* loss (3.614). If the collapsed dimensions contained critical information, we would expect worse loss. This suggests either (a) those dimensions are genuinely redundant at this training stage, (b) 50M tokens is too early for the rank difference to manifest in loss, or (c) PR captures geometric properties that don't directly map to task-relevant information. We cannot yet determine which explanation is correct.
 
-> **Conclusion 1: "γ drives rank, normalization drives loss."**
+### The Three Main Observations, Explained
+
+> **Observation 1: "γ appears to drive dimensional diversity, normalization drives loss."**
 >
-> *What this means:* QK-Norm does two helpful things, but they are independent. The normalization step (dividing by RMS) helps the model train faster (lower loss). The learned γ weights help the model maintain a richer internal representation (higher rank). You need both for full benefit.
+> *What this means:* In our experiment, QK-Norm does two things, and they appear to be independent. The normalization step (dividing by RMS) helps the model train faster (lower loss). The learned γ weights help the model maintain higher effective dimensionality in the key space. **However, we cannot yet link higher PR to better model quality** — at 50M tokens, Frozen γ achieves the *lowest* PR but the *best* loss. γ controls a geometric property that may or may not matter for downstream tasks.
 
-> **Conclusion 2: "PR follows a U-shaped trajectory."**
+> **Observation 2: "PR follows a U-shaped trajectory."**
 >
-> *What this means:* Every model — with or without QK-Norm — goes through the same three phases: (1) rank collapses as random initialization is destroyed, (2) rank recovers as the model learns meaningful structure, (3) rank plateaus. This U-shape appears to be a fundamental feature of how transformers learn, not an artifact of any particular technique.
+> *What this means:* Every model — with or without QK-Norm — goes through the same three phases: (1) rank collapses as random initialization is destroyed, (2) rank recovers as the model learns meaningful structure, (3) rank plateaus. We observe this in all three conditions, suggesting it may be a general feature of early transformer training.
 
-> **Conclusion 3: "Normalization without γ is counterproductive for rank."**
+> **Observation 3: "Normalization without γ appears counterproductive for rank."**
 >
-> *What this means:* This is the most surprising finding. If you apply QK-Norm but freeze γ at 1 (so every dimension is treated equally), you actually get *worse* rank than not using QK-Norm at all. Why? The normalization projects all key vectors onto a sphere, which constrains the geometry. Without γ to selectively stretch dimensions, this constraint *limits* the model's ability to differentiate dimensions, causing more collapse than if you just left the keys unnormalized.
+> *What this means:* If you apply QK-Norm but freeze γ at 1 (so every dimension is treated equally), you actually get *worse* rank than not using QK-Norm at all in our experiment. One possible explanation: the normalization projects all key vectors onto a sphere, which constrains the geometry. Without γ to selectively stretch dimensions, this constraint *limits* the model's ability to differentiate dimensions, causing more collapse than if you just left the keys unnormalized. We have not verified this mechanistic explanation — it is a hypothesis consistent with the data.
 
-> **Conclusion 4: "The depth-PR gradient inverts."**
+### Additional Observation: Depth-PR Gradient Inversion
+
+> In a pilot study at 500K tokens, we observed the standard depth-PR gradient: early layers had higher rank (~122) and deep layers had lower rank (~106), with a roughly linear decline of ~0.47 PR units per layer. This is consistent with deeper layers receiving stronger gradient signal from the loss and reorganizing their spectra faster.
 >
-> *What this means:* In a pilot study at 500K tokens, early layers had higher rank than deep layers. By 50M tokens, this reverses — deeper layers develop higher rank. The model's internal structure reorganizes as training progresses, with later layers developing more complex representations over time.
+> By 50M tokens, this pattern **inverts** — deeper layers develop *higher* PR than shallow layers. The model's internal structure appears to reorganize as training progresses, with later layers developing more complex, higher-dimensional representations over time.
+>
+> **Caveat:** This comparison is between two separate experiments (a 500K pilot and this 50M run) with different evaluation batch sizes and slightly different configurations. We present this as an interesting observation, not a rigorous finding. A proper analysis would require tracking per-layer PR continuously within a single run, which our data supports (see Section 3.2).
 
 ---
 
 ## 1. Overview
 
-This study investigates the causal mechanism of **QK-Normalization** (RMSNorm applied to both query and key projections) on dimensional collapse in transformer attention heads. In our Gemma-style architecture, RMSNorm is applied to **both Q and K** independently before rotary position encoding — hence the name "QK-Norm."
+This post investigates how **QK-Normalization** (RMSNorm applied to both query and key projections) affects dimensional collapse in transformer attention heads. In our Gemma-style architecture, RMSNorm is applied to **both Q and K** independently before rotary position encoding — hence the name "QK-Norm."
 
-We train a **1.5B parameter** dense LLM for **~49M tokens** under three conditions to disentangle the effect of normalization from the effect of the learned scale parameter ($\gamma$).
-
-### What is γ?
-
-When RMSNorm is applied to a vector, it first normalizes it (divides by root-mean-square), then re-scales each element by a learned weight. That learned weight vector is called $\gamma$ (gamma). Formally, for a vector $\mathbf{x} = [x_1, x_2, \ldots, x_{128}]$ (one dimension per entry of the attention head):
-
-$$\text{RMSNorm}(\mathbf{x})_j = \gamma_j \cdot \frac{x_j}{\sqrt{\frac{1}{128}\sum_{i=1}^{128} x_i^2}}$$
-
-Here:
-- $j$ is the index of one specific dimension (1 through 128, since our head dimension $d_k = 128$)
-- $x_j$ is the raw value at dimension $j$
-- The denominator $\sqrt{\frac{1}{128}\sum_{i=1}^{128} x_i^2}$ is the **root-mean-square (RMS)** of the entire vector — a single scalar that measures the overall magnitude
-- $\gamma_j$ is the learnable weight for dimension $j$ — initialized to 1.0 at the start of training
-
-**Example:** Suppose we have a 4-dimensional vector $\mathbf{x} = [2, 4, 6, 8]$ with $\gamma = [1, 1, 1, 1]$:
-- RMS = $\sqrt{(4 + 16 + 36 + 64)/4} = \sqrt{30} \approx 5.48$
-- Normalized: $[2/5.48,\ 4/5.48,\ 6/5.48,\ 8/5.48] \approx [0.365,\ 0.730,\ 1.095,\ 1.461]$
-
-**Step-by-step scaling with learned $\gamma$:**
-Suppose training learns $\gamma = [1.5, 1.0, 0.5, 0.1]$ to prioritize the first dimension and suppress the last:
-1. Dimension 1: $0.365 \times \mathbf{1.5} = 0.548$ (amplified)
-2. Dimension 2: $0.730 \times \mathbf{1.0} = 0.730$ (unchanged)
-3. Dimension 3: $1.095 \times \mathbf{0.5} = 0.548$ (dampened)
-4. Dimension 4: $1.461 \times \mathbf{0.1} = 0.146$ (nearly removed)
-
-Final output: $[0.55,\ 0.73,\ 0.55,\ 0.15]$ — **This per-dimension control is the key mechanism we study.**
-
-Each layer has its own separate $\gamma$ vector for Q and another for K (so 32 layers × 2 = 64 separate $\gamma$ vectors across the model, each with 128 learnable values).
-
-### The Three Conditions
-
-1. **QK-Norm (Learned $\gamma$)**: Full method. RMSNorm + learnable per-dimension scaling ($\gamma$ is trained via backpropagation).
-2. **QK-Norm (Frozen $\gamma=1$)**: Ablation. RMSNorm is applied, but $\gamma$ is locked at all-ones — the model gets normalization but cannot learn per-dimension scaling.
-3. **No QK-Norm**: Baseline. No normalization applied to Q or K at all.
-
-By comparing these three, we determine whether rank dynamics are driven by the normalization itself (gradient stabilization) or by the parameter $\gamma$ selectively modulating dimensions.
-
-**Key result:** The learned $\gamma$ is the dominant driver of rank preservation. At 50M tokens, Learned $\gamma$ maintains a mean PR of **65.7**, while Frozen $\gamma=1$ collapses to **59.6** — lower than even the No QK-Norm baseline (**63.3**). Normalization without learnable $\gamma$ actively hinders rank recovery.
+We train a **1.5B parameter** dense LLM for **~49M tokens** under the three conditions described above to disentangle the effect of normalization from the effect of the learned scale parameter ($\gamma$). This is an ablation study with a single seed per condition — our findings are preliminary observations that require replication.
 
 ### Architecture & Training Config
 
@@ -176,27 +164,7 @@ By comparing these three, we determine whether rank dynamics are driven by the n
 
 ---
 
-## 2. Hypothesis & Methodology
-
-We track the **Participation Ratio (PR)** of the key representations $K$ at regular intervals (every 120 steps, ≈ 2M tokens), yielding 26 measurements per condition.
-
-### The Causal Triangulation: How Three Conditions Let Us Isolate the Cause
-
-The core question is: **What makes QK-Norm different from no normalization — is it the normalization step itself, or the learned γ weights?**
-
-QK-Norm does two things at once: (1) it normalizes the vector, and (2) it applies learnable γ scaling. By adding a third condition (Frozen γ=1), we surgically remove the γ learning while keeping the normalization. Then we compare the PR (our measure of dimensional diversity) across all three:
-
-- **Scenario A — γ is the driver:** If the Learned γ model shows different PR than both Frozen and NoQK, but Frozen and NoQK look similar to each other, then it must be the γ learning that matters — because removing γ learning (Frozen) makes the model behave like having no norm at all.
-
-- **Scenario B — Normalization is the driver:** If Learned γ and Frozen show similar PR (both have normalization), but NoQK is different, then the normalization step itself is what matters — γ learning is irrelevant.
-
-- **Scenario C — Both contribute:** If all three show different PR values, then both the normalization and γ learning play a role.
-
-**Our actual result matches Scenario A** at the collapse floor, and a surprising variant afterward: Frozen γ ends up *worse* than NoQK, meaning normalization without γ learning is actively harmful.
-
-## 3. Results
-
-### 3.1 Summary
+## 2. Results Summary
 
 | Metric | Learned γ | Frozen γ=1 | No QK-Norm |
 |:---|:---:|:---:|:---:|
@@ -205,29 +173,6 @@ QK-Norm does two things at once: (1) it normalizes the vector, and (2) it applie
 | **Final Mean PR (49M)** | **65.70** | 59.55 | 63.25 |
 | **Final Train Loss** | **3.618** | **3.614** | 3.683 |
 | **Final Val Loss** | **3.440** | **3.439** | 3.505 |
-
-### 3.2 The PR Trajectory: Collapse → Recovery → Plateau
-
-![Key Rank Collapse — Does γ or Normalization Drive It?](./images/2_key_pr_causal.png)
-
-All three conditions follow a **U-shaped trajectory**:
-
-1. **Rapid Collapse (0–8M):** PR drops from ~87 to ~51–55 as random-init structure is destroyed.
-2. **Recovery (8M–25M):** PR climbs back to ~60–66 as meaningful representations form.
-3. **Plateau (25M–49M):** PR stabilizes with no significant further change.
-
-**The causal signal is clearest during recovery:**
-- Learned γ recovers to 65.7 (highest)
-- No QK-Norm recovers to 63.3
-- Frozen γ=1 recovers only to 59.6 (lowest)
-
-**Verdict:** Frozen γ ≈ NoQK at the collapse floor → normalization alone doesn't prevent collapse. But Frozen γ < NoQK after recovery → normalization without learnable γ *hurts* rank recovery. The learned $\gamma$ is the mechanism.
-
-### 3.3 Loss vs. Rank Dissociation
-
-![Training & Validation Loss](./images/1_loss.png)
-
-Normalization helps **loss** identically regardless of γ learning (Learned γ ≈ Frozen γ ≈ 3.62, both lower than NoQK = 3.68). But normalization helps **rank** only when γ is learnable. The mechanism that optimizes loss (gradient stabilization) is different from the mechanism that preserves rank (γ-mediated dimension selection).
 
 ## 4. Mathematical Background
 
@@ -267,7 +212,7 @@ where:
 
 ### 4.2 Why This Matters for Rank
 
-The **Participation Ratio (PR)** measures how many dimensions of the key space are "actively used" — i.e., how evenly the information is spread across the 128 dimensions of each attention head.
+The **Participation Ratio (PR)** measures how evenly variance is distributed across the 128 dimensions of each attention head's key space. It is a geometric measure of spectral spread, not a direct measure of information content.
 
 To compute it, we collect the key vectors $K \in \mathbb{R}^{n \times 128}$ from many tokens and compute the Singular Value Decomposition (SVD), yielding singular values $\sigma_1 \geq \sigma_2 \geq \cdots \geq \sigma_{128}$. These singular values tell us how much variance each dimension captures:
 
@@ -287,30 +232,47 @@ $$\text{PR}(K) = \frac{\left(\sum_{i=1}^{d_k} \sigma_i\right)^2}{\sum_{i=1}^{d_k
 
 The γ coefficient of variation (CV) reveals how the model uses the learnable parameter:
 
-- **High γ CV layers** (L0: 0.168, L15: 0.155, L27: 0.172): Aggressive dimension differentiation, correlated with higher PR recovery.
+- **High γ CV layers** (L0: 0.169, L15: 0.155, L27: 0.172): Aggressive dimension differentiation, correlated with higher PR recovery.
 - **Low γ CV layers** (L5–L10: 0.07–0.08): Minimal differentiation, correlated with the lowest PR values.
 - **Frozen γ=1**: CV = 0.0 at all layers (confirming ablation correctness).
 
-γ acts as a **dimension-selective amplifier** that preserves spectral diversity, rather than simply suppressing "dead" dimensions.
+### 5.1 Final γ Values: What Did the Model Learn?
+
+We saved the final γ values for all 32 layers at the end of training (49M tokens). Here is what we found:
+
+**γ values are mostly > 1.0 — the model amplifies rather than suppresses.** The global mean γ across all layers is ~1.19. Only Layer 0 has a mean γ below 1.0 (mean = 0.913). All other layers have mean γ between 1.04 and 1.37. This is the opposite of what we initially expected — rather than using γ to zero out unwanted dimensions, the model uses it to **amplify** most dimensions, with selective per-dimension variation around that elevated baseline.
+
+| Layer Zone | Layers | Mean γ | Interpretation |
+|:---|:---:|:---:|:---|
+| **Shallow** | 0–7 | 1.084 | Closest to initialization, Layer 0 is the outlier |
+| **Middle** | 8–23 | 1.298 | Strongest amplification |
+| **Deep** | 24–31 | 1.238 | Slightly less than middle layers |
+
+**Layer 0 is uniquely asymmetric.** Layer 0 shows a striking pattern: the first 64 dimensions (which correspond to high-frequency RoPE rotations) have a mean γ of 1.017, while the last 64 dimensions (low-frequency RoPE rotations) are suppressed to a mean of 0.810. Layer 0 has 14 dimensions with γ < 0.7 — all of them in the last 64 dims. No other layer shows this asymmetry. This suggests the first layer learns to de-emphasize positional information carried by low-frequency RoPE components.
+
+**γ differentiation correlates with PR recovery.** The layers with the most non-uniform γ distributions (highest CV: L27=0.172, L0=0.169, L15=0.155) tend to be the layers with the most distinct PR behavior. Layers with nearly uniform γ (lowest CV: L9=0.068, L10=0.072, L5=0.078) show minimal dimension differentiation.
+
+**Key limitation:** We only have γ values at the *final* checkpoint. We cannot track how γ evolved during training — did suppressed dimensions start low and stay low, or did they start at 1.0 and gradually decline? Tracking individual γ trajectories would reveal whether dimension selection happens early (during collapse) or late (during recovery). This is a clear next step for future work.
 
 ## 6. Limitations
 
-1. **Single Seed**: We run one seed per condition. The effect size (2–6 PR units) is larger than the 500K pilot (0.75 units), increasing confidence, but variance estimates require multiple seeds.
-2. **Early Training**: 50M tokens is ~0.3% of Chinchilla-optimal for a 1.5B model. We observe early-phase dynamics, not convergence behavior.
-3. **Key-Only Analysis**: We measure the PR of Keys ($K$). The effective rank of the full attention matrix ($QK^T$) also depends on Queries ($Q$), which we do not probe.
-4. **Muon Optimizer**: Muon's orthogonal updates may interact with spectral dynamics in ways specific to this optimizer.
+1. **Single Seed**: We run one seed per condition. The effect size (2–6 PR units) could easily shift or reverse with different random seeds. Without variance estimates, none of our PR differences are statistically confirmed.
+2. **Early Training**: 50M tokens is ~0.3% of Chinchilla-optimal for a 1.5B model. We observe early-phase dynamics, not convergence behavior. The U-shaped trajectory and plateau could be transient phenomena.
+3. **Key-Only Analysis**: We measure the PR of Keys ($K$). The effective rank of the full attention matrix ($QK^T$) also depends on Queries ($Q$), which we do not probe. It is possible that Q compensates for K collapse, or that the rank of $QK^T$ tells a different story.
+4. **Muon Optimizer**: Muon's orthogonal updates may interact with spectral dynamics in ways specific to this optimizer. All findings may be Muon-specific artifacts.
+5. **PR does not predict model quality**: This is perhaps the most important limitation. Participation Ratio captures how evenly variance is spread across dimensions — it does not measure how much task-relevant information each dimension carries. **Our own data shows that lower PR is associated with equal or better loss** (Frozen γ=1 has the lowest PR and the best loss). Until we can establish a link between PR and downstream model quality, the practical significance of γ driving higher PR remains unknown.
+6. **No singular value distributions**: We compute PR from SVD but do not save the full singular value spectrum. This means we cannot determine whether γ creates a gradual taper vs. a sharp cutoff in the eigenspectrum, which would help distinguish "efficient compression" from "dead dimensions."
+7. **No downstream evaluation**: We measure loss but do not evaluate on any benchmark or downstream task.
 
-## 7. Conclusions
 
-1. **γ drives rank, normalization drives loss.** These are separable mechanisms. QK-Norm's benefit comes from two independent contributions.
-2. **PR follows a U-shaped trajectory** (collapse → recovery → plateau), a structural feature of early training.
-3. **Normalization without γ is counterproductive for rank.** Frozen γ=1 produces the worst final PR — lower than even the no-normalization baseline.
-4. **The depth-PR gradient inverts** between early (500K) and extended (50M) training.
+### Future Work
 
-### Next Steps
+The following would strengthen or modify these findings:
 
-- **Track individual γ values** to determine which dimensions are amplified vs. suppressed
-- **Extend to 250M+ tokens** for longer-horizon dynamics
-- **Measure query PR** alongside key PR
-- **Multiple seeds** (≥3) for variance estimation
-- **Pure AdamW baseline** to isolate Muon's role
+- **Multiple seeds** (≥3) for variance estimation — the single most important next step. Our PR differences (2–6 units) may be within noise.
+- **Extend training to 250M–1B+ tokens** to determine whether the PR plateau is stable, whether the PR/loss dissociation resolves, and whether γ's geometric control eventually translates to quality differences.
+- **Measure query PR** alongside key PR, and compute the effective rank of $QK^T$ directly, to get a complete picture of attention head dimensionality.
+- **Save full singular value distributions** at training checkpoints — this would reveal whether γ creates a smooth taper or a sharp rank cutoff, which matters for understanding the mechanism.
+- **Track individual γ trajectories** over training to determine when dimension selection happens (during collapse, during recovery, or continuously).
+- **Pure AdamW baseline** to determine how much of the observed dynamics are specific to Muon's orthogonal updates.
+- **Downstream benchmark evaluation** to test whether PR differences at 50M tokens correspond to quality differences on actual tasks.
