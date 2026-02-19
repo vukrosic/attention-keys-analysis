@@ -227,7 +227,7 @@ logs_debug/
 *.arrow
 # We probably want to ignore most json files generated in data processing, but keep config/results
 # For now, following user request strictly to ignore json
-*.json
+# *.json
 !benchmark_comparison_results.json
 # Keep all JSON files in baselines folder
 !baselines/*.json
