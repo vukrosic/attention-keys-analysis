@@ -31,11 +31,11 @@ from train_llm import prepare_datasets
 # ============================================================
 TARGET_TOKENS = 50_000_000
 PROBE_EVERY = 120
-BATCH_SIZE = 4
-GRAD_ACCUM = 2
+BATCH_SIZE = 8           # H100 80GB — 16 OOMs with compile, 8 is safe
+GRAD_ACCUM = 4           # effective batch = 8*4*2048 = 65,536 tok/step
 SEED = 42
 OUT = Path("research_results/qk_norm_50m_study")
-DATA = "/root/llm-research-kit/processed_data/pretrain_mix_26000000"
+DATA = "processed_data/pretrain_1B"
 # ============================================================
 
 
@@ -48,16 +48,18 @@ def run(use_qk_norm, freeze_gamma=False):
     config.train_tokens = TARGET_TOKENS
     config.batch_size = BATCH_SIZE
     config.gradient_accumulation_steps = GRAD_ACCUM
-    config.compile_model = False
-    config.gradient_checkpointing = True
+    config.compile_model = True            # H100 benefits from torch.compile
+    config.gradient_checkpointing = True    # needed for 1.5B even on 80GB with compile
     device = torch.device('cuda')
 
-    # Data
+    # Data — the 1B dataset only has a 'train' split, so we carve out val ourselves
     data_cfg = DataConfig(dataset_path=DATA, seq_length=config.max_seq_len)
     tokenizer = setup_tokenizer(data_cfg)
     train_ds, val_ds = prepare_datasets(data_cfg, tokenizer)
-    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True)
-    val_loader = DataLoader(val_ds, batch_size=4, shuffle=True)
+    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True,
+                              num_workers=4, pin_memory=True, persistent_workers=True)
+    val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=True,
+                            num_workers=2, pin_memory=True, persistent_workers=True)
 
     torch.manual_seed(SEED + 999)
     eval_batch = next(iter(val_loader))["input_ids"].to(device)
@@ -65,19 +67,28 @@ def run(use_qk_norm, freeze_gamma=False):
     # Model
     torch.manual_seed(SEED)
     model = MinimalLLM(config).to(device)
+    raw_model = model  # keep ref for probe/gamma access before compile wraps it
     print(f"  Params: {sum(p.numel() for p in model.parameters()):,}")
+    print(f"  Batch size: {BATCH_SIZE}, Grad accum: {GRAD_ACCUM}, "
+          f"Effective batch: {BATCH_SIZE * GRAD_ACCUM * config.max_seq_len:,} tok/step")
 
-    # Freeze γ for condition B
+    # Freeze γ for condition B (must happen before compile)
     if freeze_gamma:
-        for block in model.transformer_blocks:
+        for block in raw_model.transformer_blocks:
             if hasattr(block.attention.k_norm, 'weight'):
                 block.attention.k_norm.weight.requires_grad_(False)
             if hasattr(block.attention.q_norm, 'weight'):
                 block.attention.q_norm.weight.requires_grad_(False)
         print("  🔒 γ frozen at 1.0")
 
-    probe = RankProbe(model, device, eval_batch)
+    # Probe uses hooks on transformer_blocks — set up on raw model
+    probe = RankProbe(raw_model, device, eval_batch)
     optimizers = setup_muon_optimizer(model, config)
+
+    # Compile for H100 speedup (after probe/freeze setup)
+    if config.compile_model:
+        print("  ⚡ Compiling model with torch.compile...")
+        model = torch.compile(model)
 
     res = {"tag": tag, "tokens": [], "loss": [], "val_loss": [], "mean_pr": [], "layer_pr": {}, "gamma_cv": {}}
     run_dir = OUT / tag
@@ -142,14 +153,14 @@ def run(use_qk_norm, freeze_gamma=False):
     # Final gamma save
     if use_qk_norm and not freeze_gamma:
         res["gamma_final"] = {}
-        for i, block in enumerate(model.transformer_blocks):
+        for i, block in enumerate(raw_model.transformer_blocks):
             if hasattr(block.attention.k_norm, 'weight'):
                 res["gamma_final"][str(i)] = block.attention.k_norm.weight.detach().float().cpu().tolist()
 
     with open(run_dir / "results.json", "w") as f:
         json.dump(res, f, indent=2)
 
-    del model, optimizers, probe, eval_batch
+    del model, raw_model, optimizers, probe, eval_batch
     torch.cuda.empty_cache(); gc.collect()
     return res
 
